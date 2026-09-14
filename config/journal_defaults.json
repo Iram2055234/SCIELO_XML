@@ -1,0 +1,16 @@
+{
+    "journal": {
+        "title": "VinculaTégica EFAN",
+        "abbreviated_title": "VinculaTégica EFAN",
+        "issn": "2448-5101",
+        "publisher_name": "Universidad Autónoma de Nuevo León",
+        "publisher_location": "Monterrey, Nuevo León, México"
+    },
+    "article_defaults": {
+        "category": "Artículos"
+    },
+    "license_defaults": {
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "text": "Esta obra está bajo una licencia internacional Creative Commons Atribución 4.0."
+    }
+}

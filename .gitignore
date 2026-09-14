@@ -1,0 +1,137 @@
+﻿# ============================================================
+# SCIELO_XML
+# Archivos y carpetas NO versionados
+# ============================================================
+
+# ------------------------------------------------------------
+# Python / entorno virtual
+# ------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ------------------------------------------------------------
+# Builds y distribuciones PyInstaller
+# ------------------------------------------------------------
+/build*/
+/dist*/
+/output/
+
+*.exe
+*.msi
+*.toc
+*.pkg
+*.manifest
+
+# ------------------------------------------------------------
+# Resultados y artículos de trabajo
+# ------------------------------------------------------------
+/RESULTADOS/
+/input/
+/archivo_pruebas/
+
+# ------------------------------------------------------------
+# Pruebas smoke y paquetes temporales
+# ------------------------------------------------------------
+/_SMOKE_*/
+/_QA_AUTONOMO_PAQUETE/
+/SMOKE_LOCAL_PATHS.txt
+
+# ------------------------------------------------------------
+# QA generado
+#
+# Conservamos los scripts QA normales.
+# Se ignoran únicamente directorios QA cuyo nombre inicia "_".
+# Ejemplos:
+#   _release_candidates
+#   _pilot_backups
+#   _pilot_deployments
+#   _result_backups
+#   _e2e_1354
+# ------------------------------------------------------------
+/qa/_*/
+
+# ------------------------------------------------------------
+# Archivos de transferencia / paquetes
+# ------------------------------------------------------------
+/SCIELO_XML_PARA_CHATGPT.zip
+*.zip
+
+# ------------------------------------------------------------
+# Logs y temporales
+# ------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.old
+~$*
+
+# ------------------------------------------------------------
+# Sistema operativo
+# ------------------------------------------------------------
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ------------------------------------------------------------
+# Configuración local de IDE
+# ------------------------------------------------------------
+.vscode/
+.idea/
+
+# ------------------------------------------------------------
+# Secretos / credenciales
+# ------------------------------------------------------------
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+
+# ------------------------------------------------------------
+# Bases locales
+# ------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# ------------------------------------------------------------
+# Temporales Microsoft Office
+# ------------------------------------------------------------
+~$*.docx
+~$*.dotx
+~$*.xlsx
+~$*.pptx
+
+# ============================================================
+# Copias históricas locales anteriores a Git
+# Git sustituirá este mecanismo de respaldo a partir de ahora
+# ============================================================
+*_antes_*.py
+*_antes_*.xsl
+*_antes_*.html
+*_antes_*.xml
+
+# ============================================================
+# Salidas generadas por QA
+# Los scripts QA sí se versionan
+# ============================================================
+/qa/_*.html
+/qa/_*.xml
+/qa/salida_*.txt
+/qa/salida_shapes_poc/
+
+# Imágenes generadas por pruebas QA
+/qa/**/*.png
+/qa/**/*.jpg
+/qa/**/*.jpeg
+/qa/**/*.bmp
+/qa/**/*.emf
