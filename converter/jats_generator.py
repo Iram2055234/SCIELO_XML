@@ -1574,12 +1574,10 @@ def build_body(
 def extract_reference_year(
     raw_text: str,
 ) -> str:
-    """
-    Extrae el primer año de cuatro dígitos de una referencia.
-    """
+    """Extrae el año APA de una referencia bibliográfica."""
 
     parenthesized_match = re.search(
-        r"\(((?:19|20)\d{2})[a-z]?\)",
+        r"\(((?:18|19|20)\d{2})[a-z]?\)",
         raw_text,
         flags=re.IGNORECASE,
     )
@@ -1588,7 +1586,7 @@ def extract_reference_year(
         return parenthesized_match.group(1)
 
     general_match = re.search(
-        r"\b((?:19|20)\d{2})[a-z]?\b",
+        r"\b((?:18|19|20)\d{2})[a-z]?\b",
         raw_text,
         flags=re.IGNORECASE,
     )
@@ -1599,44 +1597,1244 @@ def extract_reference_year(
     return ""
 
 
+def normalize_reference_text(
+    raw_text: str,
+) -> str:
+    """Normaliza espacios de una referencia."""
+
+    return re.sub(
+        r"\s+",
+        " ",
+        str(raw_text or ""),
+    ).strip()
+
+
+def extract_reference_doi(
+    raw_text: str,
+) -> str:
+    """Extrae DOI sin el prefijo https://doi.org/."""
+
+    match = re.search(
+        r"https?://(?:dx\.)?doi\.org/"
+        r"(10\.\d{4,9}/[^\s<>\"]+)",
+        raw_text,
+        flags=re.IGNORECASE,
+    )
+
+    if match is None:
+        match = re.search(
+            r"\bdoi\s*:\s*"
+            r"(10\.\d{4,9}/[^\s<>\"]+)",
+            raw_text,
+            flags=re.IGNORECASE,
+        )
+
+    if match is None:
+        return ""
+
+    return match.group(1).rstrip(
+        ".,;:)]}"
+    )
+
+
+def extract_reference_url(
+    raw_text: str,
+) -> str:
+    """Extrae la primera URL HTTP/HTTPS."""
+
+    match = re.search(
+        r"https?://[^\s<>\"]+",
+        raw_text,
+        flags=re.IGNORECASE,
+    )
+
+    if match is None:
+        return ""
+
+    return match.group(0).rstrip(
+        ".,;:)]}"
+    )
+
+
+def detect_reference_publication_type(
+    raw_text: str,
+) -> str:
+    """
+    Clasifica la referencia con valores SPS/JATS.
+
+    Regla editorial SCIELO_XML:
+    si el tipo no puede determinarse con suficiente
+    seguridad, se clasifica como journal.
+
+    La firma bibliografica de revista se evalua antes
+    que palabras como "conference", para evitar que
+    revistas como Journal of Physics: Conference Series
+    sean clasificadas como actas de congreso.
+    """
+
+    text = normalize_reference_text(
+        raw_text
+    )
+
+    lower = text.casefold()
+
+    has_url = bool(
+        re.search(
+            r"https?://",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    has_doi = bool(
+        extract_reference_doi(
+            text
+        )
+    )
+
+    # Revista con volumen:
+    # Revista, 12(3), 10-20
+    # Revista, 12, 10-20
+    # Revista, 12(3), Article 12345
+    volume_signature = bool(
+        re.search(
+            r",\s*\d+\s*"
+            r"(?:\([^)]+\))?\s*,\s*"
+            r"(?:"
+            r"\d+\s*[-–—]\s*\d+"
+            r"|article\s+\w+"
+            r")",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    # Revista sin volumen explícito:
+    # Revista, (25), 75-96
+    # Revista, (24), Article 1205
+    issue_only_signature = bool(
+        re.search(
+            r",\s*\([^)]+\)\s*,\s*"
+            r"(?:"
+            r"\d+\s*[-–—]\s*\d+"
+            r"|article\s+\w+"
+            r")",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    has_journal_signature = (
+        volume_signature
+        or issue_only_signature
+    )
+
+    # Una firma inequívoca de revista tiene prioridad
+    # sobre palabras incluidas en el nombre de la revista.
+    if has_journal_signature:
+        return "journal"
+
+    marker_rules = (
+        (
+            "thesis",
+            (
+                "[tesis",
+                " thesis",
+                "dissertation",
+                "dissertação",
+                "monografía",
+                "monografia",
+            ),
+        ),
+        (
+            "confproc",
+            (
+                "[ponencia",
+                "[conference",
+                "[conferencia",
+                "[congreso",
+                "[simposio",
+                "[symposium",
+                "conference proceedings",
+                "proceedings of",
+                "actas del congreso",
+                "memorias del congreso",
+            ),
+        ),
+        (
+            "report",
+            (
+                "technical report",
+                "research report",
+                "informe técnico",
+                "informe tecnico",
+                "reporte técnico",
+                "reporte tecnico",
+                "working paper",
+            ),
+        ),
+        (
+            "software",
+            (
+                "[software]",
+                "computer software",
+            ),
+        ),
+        (
+            "database",
+            (
+                "[base de datos]",
+                "[database]",
+            ),
+        ),
+        (
+            "patent",
+            (
+                "patent",
+                "patente",
+            ),
+        ),
+        (
+            "legal-doc",
+            (
+                "ley ",
+                "decreto ",
+                "reglamento ",
+                "norma oficial",
+                "resolución ",
+                "resolucion ",
+            ),
+        ),
+        (
+            "newspaper",
+            (
+                "[newspaper]",
+                "[periódico]",
+                "[periodico]",
+                "the new york times",
+                "the guardian",
+                "el país",
+                "el pais",
+            ),
+        ),
+    )
+
+    for publication_type, markers in marker_rules:
+
+        if any(
+            marker in lower
+            for marker in markers
+        ):
+            return publication_type
+
+    if re.search(
+        r"\((?:\d+)"
+        r"(?:st|nd|rd|th)?\s+ed\.\)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "book"
+
+    if re.search(
+        r"\((?:\d+)\.?\s*ed\.?\)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "book"
+
+    if re.search(
+        r"\b(?:en|in)\s+.+?"
+        r"\((?:eds?\.|editores?)\)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "book"
+
+    if (
+        re.search(
+            r"\b(?:"
+            r"springer|routledge|pearson|wiley|"
+            r"sage|mcgraw(?:-hill)?|elsevier|"
+            r"erlbaum|university press"
+            r")\b",
+            lower,
+        )
+        and not has_journal_signature
+    ):
+        return "book"
+
+    if (
+        has_url
+        and not has_doi
+        and re.search(
+            r"\b(?:"
+            r"recuperado|retrieved|"
+            r"sitio web|website|blog"
+            r")\b",
+            lower,
+        )
+    ):
+        return "webpage"
+
+    # Regla solicitada:
+    # jamás usar "other" como fallback.
+    return "journal"
+
+
+def split_apa_reference(
+    raw_text: str,
+) -> dict[str, str]:
+    """Separa autores, año, título y resto según patrón APA."""
+
+    text = normalize_reference_text(
+        raw_text
+    )
+
+    year_match = re.search(
+        r"\(((?:18|19|20)\d{2})"
+        r"[a-z]?\)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if year_match is None:
+        return {
+            "authors": "",
+            "year": (
+                extract_reference_year(
+                    text
+                )
+            ),
+            "title": text,
+            "tail": "",
+        }
+
+    # No quitar el punto final porque puede ser
+    # la inicial del último autor APA.
+    authors = text[
+        : year_match.start()
+    ].strip()
+
+    year = year_match.group(1)
+
+    remainder = text[
+        year_match.end() :
+    ].strip()
+
+    remainder = re.sub(
+        r"^\.\s*",
+        "",
+        remainder,
+    )
+
+    title = remainder
+    tail = ""
+
+    split_match = re.search(
+        r"\.\s+(?=\S)",
+        remainder,
+    )
+
+    if split_match is not None:
+
+        title = remainder[
+            : split_match.start()
+        ].strip()
+
+        tail = remainder[
+            split_match.end() :
+        ].strip()
+
+    return {
+        "authors": authors,
+        "year": year,
+        "title": title.strip(" ."),
+        "tail": tail.strip(),
+    }
+
+
+def parse_apa_author_names(
+    author_text: str,
+) -> list[tuple[str, str]]:
+    """Extrae apellidos e iniciales de autores APA."""
+
+    text = normalize_reference_text(
+        author_text
+    )
+
+    if not text:
+        return []
+
+    pattern = re.compile(
+        r"([^,&;]+?),\s*"
+        r"((?:[A-ZÁÉÍÓÚÑÜ]\."
+        r"(?:[-–][A-ZÁÉÍÓÚÑÜ]\.)?"
+        r"(?:\s*[A-ZÁÉÍÓÚÑÜ]\.)*))"
+    )
+
+    names: list[
+        tuple[str, str]
+    ] = []
+
+    for match in pattern.finditer(
+        text
+    ):
+
+        surname = match.group(
+            1
+        ).strip()
+
+        surname = re.sub(
+            r"^(?:&|and|y)\s+",
+            "",
+            surname,
+            flags=re.IGNORECASE,
+        ).strip(" ,.;")
+
+        given_names = match.group(
+            2
+        ).strip()
+
+        given_names = re.sub(
+            r"[\s.]+",
+            "",
+            given_names,
+        )
+
+        if surname and given_names:
+
+            names.append(
+                (
+                    surname,
+                    given_names,
+                )
+            )
+
+    return names
+
+
+def add_reference_authors(
+    element_citation: etree._Element,
+    author_text: str,
+) -> None:
+    """
+    Agrega autores usando la estructura JATS correcta:
+    person-group > name > surname/given-names.
+    """
+
+    text = normalize_reference_text(
+        author_text
+    )
+
+    if not text:
+        return
+
+    names = parse_apa_author_names(
+        text
+    )
+
+    person_group = etree.SubElement(
+        element_citation,
+        "person-group",
+        {
+            "person-group-type": (
+                "author"
+            ),
+        },
+    )
+
+    if names:
+
+        for surname, given_names in names:
+
+            name = etree.SubElement(
+                person_group,
+                "name",
+            )
+
+            add_text_element(
+                name,
+                "surname",
+                surname,
+            )
+
+            add_text_element(
+                name,
+                "given-names",
+                given_names,
+            )
+
+        if re.search(
+            r"\bet\s+al\.?",
+            text,
+            flags=re.IGNORECASE,
+        ):
+
+            etree.SubElement(
+                person_group,
+                "etal",
+            )
+
+        return
+
+    # Autor institucional.
+    add_text_element(
+        person_group,
+        "collab",
+        text.rstrip("."),
+    )
+
+
+def strip_reference_identifiers(
+    text: str,
+) -> str:
+    """
+    Retira DOI y URL del texto auxiliar una vez
+    que serán etiquetados por separado.
+    """
+
+    cleaned = re.sub(
+        r"https?://(?:dx\.)?doi\.org/"
+        r"[^\s<>\"]+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    cleaned = re.sub(
+        r"\bdoi\s*:\s*"
+        r"10\.\d{4,9}/[^\s<>\"]+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    cleaned = re.sub(
+        r"https?://[^\s<>\"]+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    return cleaned.strip(
+        " .;,"
+    )
+
+
+def add_page_locator(
+    element_citation: etree._Element,
+    locator: str,
+) -> None:
+    """Agrega páginas o identificador electrónico."""
+
+    value = normalize_reference_text(
+        locator
+    ).strip(" .;,")
+
+    if not value:
+        return
+
+    article_match = re.match(
+        r"article\s+(.+)$",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    if article_match is not None:
+
+        add_text_element(
+            element_citation,
+            "elocation-id",
+            article_match.group(
+                1
+            ).strip(),
+        )
+
+        return
+
+    pages_match = re.match(
+        r"^(\d+)\s*[-–—]\s*(\d+)$",
+        value,
+    )
+
+    if pages_match is not None:
+
+        add_text_element(
+            element_citation,
+            "fpage",
+            pages_match.group(1),
+        )
+
+        add_text_element(
+            element_citation,
+            "lpage",
+            pages_match.group(2),
+        )
+
+        return
+
+    if re.fullmatch(
+        r"\d+",
+        value,
+    ):
+
+        add_text_element(
+            element_citation,
+            "fpage",
+            value,
+        )
+
+
+def add_journal_details(
+    element_citation: etree._Element,
+    title: str,
+    tail: str,
+) -> None:
+    """
+    Estructura una referencia de artículo de revista.
+
+    Soporta:
+    - Revista, 12(3), 10-20
+    - Revista, 12, 10-20
+    - Revista, (3), 10-20
+    - Revista, 12(3), Article 123
+    - Revista, (3), Article 123
+    """
+
+    if title:
+
+        add_text_element(
+            element_citation,
+            "article-title",
+            title,
+        )
+
+    clean_tail = strip_reference_identifiers(
+        tail
+    )
+
+    # -----------------------------------------------------------------
+    # CASO 1:
+    # Revista sin volumen explícito.
+    #
+    # Denarius, (25), 75–96
+    # Economía: Teoría y Práctica, (52), 69–97
+    # Hachetetepé. Revista Científica..., (24), Article 1205
+    # -----------------------------------------------------------------
+
+    issue_only_match = re.match(
+        r"^(?P<source>.+?),\s*"
+        r"\((?P<issue>[^)]+)\)"
+        r"\s*,\s*"
+        r"(?P<locator>"
+        r"\d+\s*[-–—]\s*\d+"
+        r"|Article\s+[^,.;]+"
+        r"|(?:e?\d+)"
+        r")"
+        r"(?:[.,;]\s*)?$",
+        clean_tail,
+        flags=re.IGNORECASE,
+    )
+
+    if issue_only_match is not None:
+
+        source_name = issue_only_match.group(
+            "source"
+        ).strip(" .;,")
+
+        if source_name:
+
+            add_text_element(
+                element_citation,
+                "source",
+                source_name,
+            )
+
+        issue = issue_only_match.group(
+            "issue"
+        ).strip()
+
+        if issue:
+
+            add_text_element(
+                element_citation,
+                "issue",
+                issue,
+            )
+
+        locator = issue_only_match.group(
+            "locator"
+        )
+
+        if locator:
+
+            add_page_locator(
+                element_citation,
+                locator,
+            )
+
+        return
+
+    # -----------------------------------------------------------------
+    # CASO 2:
+    # Revista con volumen y número.
+    #
+    # Revista, 30(2), 27–42
+    # Revista, 14(5), Article 2983
+    # -----------------------------------------------------------------
+
+    volume_issue_match = re.match(
+        r"^(?P<source>.+?),\s*"
+        r"(?P<volume>\d+)"
+        r"\((?P<issue>[^)]+)\)"
+        r"(?:,\s*"
+        r"(?P<locator>"
+        r"\d+\s*[-–—]\s*\d+"
+        r"|Article\s+[^,.;]+"
+        r"|(?:e?\d+)"
+        r"))?"
+        r"(?:[.,;]\s*)?$",
+        clean_tail,
+        flags=re.IGNORECASE,
+    )
+
+    if volume_issue_match is not None:
+
+        source_name = volume_issue_match.group(
+            "source"
+        ).strip(" .;,")
+
+        if source_name:
+
+            add_text_element(
+                element_citation,
+                "source",
+                source_name,
+            )
+
+        add_text_element(
+            element_citation,
+            "volume",
+            volume_issue_match.group(
+                "volume"
+            ),
+        )
+
+        issue = volume_issue_match.group(
+            "issue"
+        ).strip()
+
+        if issue:
+
+            add_text_element(
+                element_citation,
+                "issue",
+                issue,
+            )
+
+        locator = volume_issue_match.group(
+            "locator"
+        )
+
+        if locator:
+
+            add_page_locator(
+                element_citation,
+                locator,
+            )
+
+        return
+
+    # -----------------------------------------------------------------
+    # CASO 3:
+    # Revista con volumen, sin número.
+    #
+    # Journal..., 43, 115–135
+    # Journal of Physics: Conference Series, 953, Article 012040
+    # -----------------------------------------------------------------
+
+    volume_only_match = re.match(
+        r"^(?P<source>.+?),\s*"
+        r"(?P<volume>\d+)"
+        r"(?:,\s*"
+        r"(?P<locator>"
+        r"\d+\s*[-–—]\s*\d+"
+        r"|Article\s+[^,.;]+"
+        r"|(?:e?\d+)"
+        r"))?"
+        r"(?:[.,;]\s*)?$",
+        clean_tail,
+        flags=re.IGNORECASE,
+    )
+
+    if volume_only_match is not None:
+
+        source_name = volume_only_match.group(
+            "source"
+        ).strip(" .;,")
+
+        if source_name:
+
+            add_text_element(
+                element_citation,
+                "source",
+                source_name,
+            )
+
+        add_text_element(
+            element_citation,
+            "volume",
+            volume_only_match.group(
+                "volume"
+            ),
+        )
+
+        locator = volume_only_match.group(
+            "locator"
+        )
+
+        if locator:
+
+            add_page_locator(
+                element_citation,
+                locator,
+            )
+
+        return
+
+    # -----------------------------------------------------------------
+    # FALLBACK:
+    # conserva el nombre de fuente completo siempre que sea posible.
+    # -----------------------------------------------------------------
+
+    if clean_tail:
+
+        source_name = clean_tail.strip(
+            " .;,"
+        )
+
+        if source_name:
+
+            add_text_element(
+                element_citation,
+                "source",
+                source_name,
+            )
+
+
+def add_book_details(
+    element_citation: etree._Element,
+    title: str,
+    tail: str,
+) -> None:
+    """Estructura libros y capítulos de libro."""
+
+    clean_tail = strip_reference_identifiers(
+        tail
+    )
+
+    chapter_match = re.match(
+        r"^(?:En|In)\s+.+?"
+        r"\((?:Eds?\.|editores?)\),\s*"
+        r"(?P<source>.+?)\s*"
+        r"\(pp\.\s*"
+        r"(?P<pages>\d+\s*[-–—]\s*\d+)"
+        r"\)\.?\s*"
+        r"(?P<publisher>.+)?$",
+        clean_tail,
+        flags=re.IGNORECASE,
+    )
+
+    if chapter_match is not None:
+
+        if title:
+
+            add_text_element(
+                element_citation,
+                "chapter-title",
+                title,
+            )
+
+        source_name = chapter_match.group(
+            "source"
+        ).strip(" .;,")
+
+        if source_name:
+
+            add_text_element(
+                element_citation,
+                "source",
+                source_name,
+            )
+
+        add_page_locator(
+            element_citation,
+            chapter_match.group(
+                "pages"
+            ),
+        )
+
+        publisher = chapter_match.group(
+            "publisher"
+        )
+
+        if publisher:
+
+            publisher = publisher.strip(
+                " .;,"
+            )
+
+            if publisher:
+
+                add_text_element(
+                    element_citation,
+                    "publisher-name",
+                    publisher,
+                )
+
+        return
+
+    edition = ""
+
+    edition_match = re.search(
+        r"\(([^()]*(?:ed\.|edition|edición)"
+        r"[^()]*)\)",
+        title,
+        flags=re.IGNORECASE,
+    )
+
+    if edition_match is not None:
+
+        edition = edition_match.group(
+            1
+        ).strip()
+
+        title = (
+            title[
+                : edition_match.start()
+            ]
+            + title[
+                edition_match.end() :
+            ]
+        ).strip(" .")
+
+    if title:
+
+        add_text_element(
+            element_citation,
+            "source",
+            title,
+        )
+
+    if edition:
+
+        add_text_element(
+            element_citation,
+            "edition",
+            edition,
+        )
+
+    if clean_tail:
+
+        publisher = re.split(
+            r"\.\s+",
+            clean_tail,
+            maxsplit=1,
+        )[-1].strip(" .;,")
+
+        if publisher:
+
+            add_text_element(
+                element_citation,
+                "publisher-name",
+                publisher,
+            )
+
+
+def add_thesis_details(
+    element_citation: etree._Element,
+    title: str,
+    tail: str,
+) -> None:
+    """Estructura tesis y disertaciones."""
+
+    institution = ""
+
+    bracket_match = re.search(
+        r"\[(?:[^\],]+),\s*([^\]]+)\]",
+        title,
+        flags=re.IGNORECASE,
+    )
+
+    if bracket_match is not None:
+
+        institution = bracket_match.group(
+            1
+        ).strip()
+
+        title = re.sub(
+            r"\s*\[[^\]]+\]\s*",
+            "",
+            title,
+        ).strip()
+
+    if title:
+
+        add_text_element(
+            element_citation,
+            "source",
+            title,
+        )
+
+    if institution:
+
+        add_text_element(
+            element_citation,
+            "institution",
+            institution,
+        )
+
+    clean_tail = strip_reference_identifiers(
+        tail
+    )
+
+    if clean_tail:
+
+        add_text_element(
+            element_citation,
+            "comment",
+            clean_tail,
+        )
+
+
+def add_generic_details(
+    element_citation: etree._Element,
+    publication_type: str,
+    title: str,
+    tail: str,
+    url: str,
+) -> None:
+    """
+    Estructura referencias reconocidas distintas
+    de journal/book/thesis.
+    """
+
+    clean_tail = strip_reference_identifiers(
+        tail
+    )
+
+    if publication_type in {
+        "webpage",
+        "newspaper",
+    }:
+
+        if title:
+
+            add_text_element(
+                element_citation,
+                "article-title",
+                title,
+            )
+
+        source_name = clean_tail
+
+        if not source_name and url:
+
+            host_match = re.match(
+                r"https?://(?:www\.)?"
+                r"([^/]+)",
+                url,
+                flags=re.IGNORECASE,
+            )
+
+            if host_match is not None:
+
+                source_name = (
+                    host_match.group(1)
+                )
+
+        if source_name:
+
+            source_name = re.split(
+                r"\.\s+",
+                source_name,
+                maxsplit=1,
+            )[0].strip(" .;,")
+
+            if source_name:
+
+                add_text_element(
+                    element_citation,
+                    "source",
+                    source_name,
+                )
+
+        return
+
+    if title:
+
+        add_text_element(
+            element_citation,
+            "source",
+            title,
+        )
+
+    if clean_tail:
+
+        if publication_type == "report":
+
+            add_text_element(
+                element_citation,
+                "publisher-name",
+                clean_tail,
+            )
+
+        else:
+
+            add_text_element(
+                element_citation,
+                "comment",
+                clean_tail,
+            )
+
+
+def add_reference_identifiers(
+    element_citation: etree._Element,
+    doi: str,
+    url: str,
+) -> None:
+    """Agrega DOI y URL usando semántica JATS."""
+
+    if doi:
+
+        add_text_element(
+            element_citation,
+            "pub-id",
+            doi,
+            {
+                "pub-id-type": "doi",
+            },
+        )
+
+    if url:
+
+        ext_link = etree.SubElement(
+            element_citation,
+            "ext-link",
+            {
+                "ext-link-type": "uri",
+                (
+                    f"{{{XLINK_NAMESPACE}}}"
+                    "href"
+                ): url,
+            },
+        )
+
+        ext_link.text = url
+
+
 def build_element_citation(
     reference_element: etree._Element,
     reference: Reference,
 ) -> None:
     """
-    Construye una representación estructurada inicial.
-
-    En una etapa posterior se separarán autores,
-    título, fuente, DOI, URL, volumen y páginas.
+    Construye element-citation estructurado
+    desde una referencia bibliográfica APA.
     """
 
-    raw_text = str(
-        reference.raw_text or ""
-    ).strip()
+    raw_text = normalize_reference_text(
+        reference.raw_text
+    )
+
+    publication_type = (
+        detect_reference_publication_type(
+            raw_text
+        )
+    )
+
+    parts = split_apa_reference(
+        raw_text
+    )
+
+    doi = extract_reference_doi(
+        raw_text
+    )
+
+    url = extract_reference_url(
+        raw_text
+    )
 
     element_citation = etree.SubElement(
         reference_element,
         "element-citation",
         {
-            "publication-type": "other",
+            "publication-type": (
+                publication_type
+            ),
         },
     )
 
-    year = extract_reference_year(
-        raw_text
+    add_reference_authors(
+        element_citation,
+        parts["authors"],
+    )
+
+    title = parts["title"]
+    tail = parts["tail"]
+
+    if publication_type == "journal":
+
+        add_journal_details(
+            element_citation,
+            title,
+            tail,
+        )
+
+    elif publication_type == "book":
+
+        add_book_details(
+            element_citation,
+            title,
+            tail,
+        )
+
+    elif publication_type == "thesis":
+
+        add_thesis_details(
+            element_citation,
+            title,
+            tail,
+        )
+
+    else:
+
+        add_generic_details(
+            element_citation,
+            publication_type,
+            title,
+            tail,
+            url,
+        )
+
+    year = (
+        parts["year"]
+        or extract_reference_year(
+            raw_text
+        )
     )
 
     if year:
+
         add_text_element(
             element_citation,
             "year",
             year,
         )
 
-    add_text_element(
+    add_reference_identifiers(
         element_citation,
-        "comment",
-        raw_text,
+        doi,
+        url,
     )
 
 
