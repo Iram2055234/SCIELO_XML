@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from lxml import etree
+
 from converter.office_conversion_service import (
     OfficeConversionServiceResult,
 )
@@ -620,6 +622,900 @@ def rewrite_published_media_references(
     return replacements
 
 
+
+def normalize_js4_published_xml(
+    file_path: Path,
+) -> dict[str, int]:
+    """
+    Normaliza solamente la copia XML publicada
+    conforme a los ajustes requeridos por JS4.
+
+    No modifica XML tecnico, HTML, PDF ni EPUB.
+    """
+
+    path = Path(
+        file_path
+    )
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"No existe XML publicado: {path}"
+        )
+
+    parser = etree.XMLParser(
+        remove_blank_text=False,
+        recover=False,
+    )
+
+    tree = etree.parse(
+        str(path),
+        parser,
+    )
+
+    root = tree.getroot()
+
+    xlink_namespace = (
+        "http://www.w3.org/1999/xlink"
+    )
+
+    xlink_href = (
+        f"{{{xlink_namespace}}}href"
+    )
+
+    counters = {
+        "mixed_citation_removed": 0,
+        "ext_link_removed": 0,
+        "url_href_removed": 0,
+        "graphic_href_normalized": 0,
+        "alt_text_moved": 0,
+        "alt_text_deduplicated": 0,
+        "kwd_lang_redundant_removed": 0,
+        "license_uri_preserved": 0,
+        "license_uri_added": 0,
+        "ali_license_ref_added": 0,
+        "license_xlink_removed": 0,
+        "copyright_holder_updated": 0,
+        "copyright_statement_aligned": 0,
+    }
+
+    # -------------------------------------------------------------
+    # 1. Eliminar mixed-citation.
+    # -------------------------------------------------------------
+
+    mixed_citations = root.xpath(
+        ".//*[local-name()='mixed-citation']"
+    )
+
+    for element in mixed_citations:
+
+        parent = element.getparent()
+
+        if parent is None:
+            continue
+
+        parent.remove(
+            element
+        )
+
+        counters[
+            "mixed_citation_removed"
+        ] += 1
+
+    # -------------------------------------------------------------
+    # 2. Eliminar ext-link.
+    # -------------------------------------------------------------
+
+    ext_links = root.xpath(
+        ".//*[local-name()='ext-link']"
+    )
+
+    for element in ext_links:
+
+        parent = element.getparent()
+
+        if parent is None:
+            continue
+
+        parent.remove(
+            element
+        )
+
+        counters[
+            "ext_link_removed"
+        ] += 1
+
+    # -------------------------------------------------------------
+    # 3. Normalizar xlink:href.
+    #
+    # graphic:
+    # ../IMAGENES/fig1.png -> fig1.png
+    #
+    # otros elementos:
+    # si href es http/https se elimina.
+    # -------------------------------------------------------------
+
+    for element in root.iter():
+
+        href = element.get(
+            xlink_href
+        )
+
+        if not href:
+            continue
+
+        local_name = etree.QName(
+            element
+        ).localname
+
+        clean_href = str(
+            href
+        ).strip()
+
+        if local_name == "graphic":
+
+            filename = (
+                clean_href
+                .replace("\\", "/")
+                .rsplit("/", 1)[-1]
+            )
+
+            if (
+                filename
+                and filename != clean_href
+            ):
+                element.set(
+                    xlink_href,
+                    filename,
+                )
+
+                counters[
+                    "graphic_href_normalized"
+                ] += 1
+
+            continue
+
+        if clean_href.lower().startswith(
+            (
+                "http://",
+                "https://",
+            )
+        ):
+
+            if local_name == "license":
+
+                normalized_license_href = (
+                    clean_href
+                    .lower()
+                    .rstrip("/")
+                )
+
+                if normalized_license_href in (
+                    "http://creativecommons.org/licenses/by/4.0",
+                    "https://creativecommons.org/licenses/by/4.0",
+                ):
+                    del element.attrib[
+                        xlink_href
+                    ]
+
+                    counters[
+                        "license_xlink_removed"
+                    ] += 1
+
+                    continue
+
+            del element.attrib[
+                xlink_href
+            ]
+
+            counters[
+                "url_href_removed"
+            ] += 1
+
+    # -------------------------------------------------------------
+    # 3B. Garantizar URI canonica CC BY 4.0 mediante ALI.
+    #
+    #     JATS4R espera la URI canonica en:
+    #     <ali:license_ref>...</ali:license_ref>
+    #
+    #     No se conserva xlink:href en <license>.
+    # -------------------------------------------------------------
+
+    ali_namespace = (
+        "http://www.niso.org/schemas/ali/1.0/"
+    )
+
+    etree.register_namespace(
+        "ali",
+        ali_namespace,
+    )
+
+    licenses = root.xpath(
+        ".//*[local-name()='license']"
+    )
+
+    for license_element in licenses:
+
+        license_text = " ".join(
+            "".join(
+                license_element.itertext()
+            ).split()
+        )
+
+        normalized_text = (
+            license_text.casefold()
+        )
+
+        is_cc_by_4 = (
+            "cc by 4.0"
+            in normalized_text
+            or (
+                "creative commons"
+                in normalized_text
+                and "atribuci?n 4.0"
+                in normalized_text
+            )
+            or (
+                "creative commons"
+                in normalized_text
+                and "attribution 4.0"
+                in normalized_text
+            )
+        )
+
+        existing_href = str(
+            license_element.get(
+                xlink_href,
+                "",
+            )
+        ).strip()
+
+        normalized_href = (
+            existing_href
+            .lower()
+            .rstrip("/")
+        )
+
+        if normalized_href in (
+            "http://creativecommons.org/licenses/by/4.0",
+            "https://creativecommons.org/licenses/by/4.0",
+        ):
+
+            if xlink_href in license_element.attrib:
+                del license_element.attrib[
+                    xlink_href
+                ]
+
+                counters[
+                    "license_xlink_removed"
+                ] += 1
+
+            is_cc_by_4 = True
+
+        if not is_cc_by_4:
+            continue
+
+        license_ref_nodes = license_element.xpath(
+            "./*[local-name()='license_ref'"
+            " and namespace-uri()='"
+            "http://www.niso.org/schemas/ali/1.0/"
+            "']"
+        )
+
+        if license_ref_nodes:
+
+            license_ref = (
+                license_ref_nodes[0]
+            )
+
+        else:
+
+            license_ref = etree.Element(
+                f"{{{ali_namespace}}}license_ref"
+            )
+
+            license_element.insert(
+                0,
+                license_ref,
+            )
+
+            counters[
+                "ali_license_ref_added"
+            ] += 1
+
+        license_ref.text = (
+            "https://creativecommons.org/licenses/by/4.0/"
+        )
+
+    # -------------------------------------------------------------
+    # 4. Mover alt-text desde fig hacia graphic.
+    # -------------------------------------------------------------
+
+    graphics = root.xpath(
+        ".//*[local-name()='graphic']"
+    )
+
+    for graphic in graphics:
+
+        parent = graphic.getparent()
+
+        if parent is None:
+            continue
+
+        if etree.QName(
+            parent
+        ).localname != "fig":
+            continue
+
+        existing_inside = graphic.xpath(
+            "./*[local-name()='alt-text']"
+        )
+
+        if existing_inside:
+            continue
+
+        sibling_alt = None
+
+        for child in list(parent):
+
+            if etree.QName(
+                child
+            ).localname == "alt-text":
+
+                sibling_alt = child
+                break
+
+        if sibling_alt is None:
+            continue
+
+        parent.remove(
+            sibling_alt
+        )
+
+        graphic.insert(
+            0,
+            sibling_alt,
+        )
+
+        counters[
+            "alt_text_moved"
+        ] += 1
+
+    # -------------------------------------------------------------
+    # 4B. Evitar que alt-text duplique exactamente el titulo
+    #     de la figura.
+    #
+    #     Si ya existe un alt-text distinto, se conserva.
+    #     Solo se sustituye cuando ambos textos son iguales.
+    # -------------------------------------------------------------
+
+    figures = root.xpath(
+        ".//*[local-name()='fig']"
+    )
+
+    for figure in figures:
+
+        graphic_nodes = figure.xpath(
+            "./*[local-name()='graphic']"
+        )
+
+        if not graphic_nodes:
+            continue
+
+        graphic = graphic_nodes[0]
+
+        alt_nodes = graphic.xpath(
+            "./*[local-name()='alt-text']"
+        )
+
+        if not alt_nodes:
+            continue
+
+        alt_element = alt_nodes[0]
+
+        alt_text = " ".join(
+            "".join(
+                alt_element.itertext()
+            ).split()
+        )
+
+        title_nodes = figure.xpath(
+            "./*[local-name()='caption']"
+            "/*[local-name()='title']"
+        )
+
+        if not title_nodes:
+            continue
+
+        title_text = " ".join(
+            "".join(
+                title_nodes[0].itertext()
+            ).split()
+        )
+
+        if not alt_text or not title_text:
+            continue
+
+        if alt_text.casefold() != title_text.casefold():
+            continue
+
+        label_nodes = figure.xpath(
+            "./*[local-name()='label']"
+        )
+
+        if label_nodes:
+            label_text = " ".join(
+                "".join(
+                    label_nodes[0].itertext()
+                ).split()
+            )
+        else:
+            label_text = ""
+
+        if not label_text:
+            figure_id = str(
+                figure.get(
+                    "id",
+                    "",
+                )
+            ).strip()
+
+            if figure_id:
+                label_text = figure_id
+            else:
+                label_text = "la figura"
+
+        alt_element.text = (
+            "Representaci?n visual correspondiente a "
+            f"{label_text} del art?culo."
+        )
+
+        counters[
+            "alt_text_deduplicated"
+        ] += 1
+
+    # -------------------------------------------------------------
+    # 4C. Eliminar xml:lang redundante en kwd-group.
+    #
+    #     Si el idioma del kwd-group es igual al idioma ra?z del
+    #     art?culo, el atributo es redundante y se elimina.
+    #     Idiomas distintos, por ejemplo "en", se conservan.
+    # -------------------------------------------------------------
+
+    xml_namespace = (
+        "http://www.w3.org/XML/1998/namespace"
+    )
+
+    xml_lang_attr = (
+        f"{{{xml_namespace}}}lang"
+    )
+
+    article_lang = str(
+        root.get(
+            xml_lang_attr,
+            "",
+        )
+    ).strip()
+
+    if article_lang:
+
+        kwd_groups = root.xpath(
+            ".//*[local-name()='kwd-group']"
+        )
+
+        for kwd_group in kwd_groups:
+
+            kwd_lang = str(
+                kwd_group.get(
+                    xml_lang_attr,
+                    "",
+                )
+            ).strip()
+
+            if not kwd_lang:
+                continue
+
+            if (
+                kwd_lang.casefold()
+                != article_lang.casefold()
+            ):
+                continue
+
+            del kwd_group.attrib[
+                xml_lang_attr
+            ]
+
+            counters[
+                "kwd_lang_redundant_removed"
+            ] += 1
+
+    # -------------------------------------------------------------
+    # 5. Obtener autores directamente de contrib-group.
+    # -------------------------------------------------------------
+
+    author_contribs = root.xpath(
+        ".//*[local-name()='article-meta']"
+        "//*[local-name()='contrib'"
+        " and @contrib-type='author']"
+    )
+
+    author_names: list[str] = []
+
+    for contrib in author_contribs:
+
+        name_nodes = contrib.xpath(
+            "./*[local-name()='name']"
+        )
+
+        if name_nodes:
+
+            name_node = name_nodes[0]
+
+            given_nodes = name_node.xpath(
+                "./*[local-name()='given-names']"
+            )
+
+            surname_nodes = name_node.xpath(
+                "./*[local-name()='surname']"
+            )
+
+            given_names = ""
+
+            if given_nodes:
+                given_names = "".join(
+                    given_nodes[0].itertext()
+                ).strip()
+
+            surname = ""
+
+            if surname_nodes:
+                surname = "".join(
+                    surname_nodes[0].itertext()
+                ).strip()
+
+            display_name = " ".join(
+                value
+                for value in (
+                    given_names,
+                    surname,
+                )
+                if value
+            ).strip()
+
+            if display_name:
+                author_names.append(
+                    display_name
+                )
+
+                continue
+
+        collab_nodes = contrib.xpath(
+            "./*[local-name()='collab']"
+        )
+
+        if collab_nodes:
+
+            collab = "".join(
+                collab_nodes[0].itertext()
+            ).strip()
+
+            if collab:
+                author_names.append(
+                    collab
+                )
+
+    # Eliminar duplicados conservando orden.
+    unique_authors: list[str] = []
+
+    for author_name in author_names:
+
+        if author_name not in unique_authors:
+            unique_authors.append(
+                author_name
+            )
+
+    # -------------------------------------------------------------
+    # 6. Copyright holder = autores del articulo.
+    # -------------------------------------------------------------
+
+    if unique_authors:
+
+        holder_text = "; ".join(
+            unique_authors
+        )
+
+        holder_nodes = root.xpath(
+            ".//*[local-name()='article-meta']"
+            "/*[local-name()='permissions']"
+            "/*[local-name()='copyright-holder']"
+        )
+
+        if holder_nodes:
+
+            holder_nodes[0].text = (
+                holder_text
+            )
+
+            counters[
+                "copyright_holder_updated"
+            ] += 1
+
+        else:
+
+            permissions_nodes = root.xpath(
+                ".//*[local-name()='article-meta']"
+                "/*[local-name()='permissions']"
+            )
+
+            if permissions_nodes:
+
+                permissions = (
+                    permissions_nodes[0]
+                )
+
+                holder = etree.Element(
+                    "copyright-holder"
+                )
+
+                holder.text = holder_text
+
+                license_nodes = [
+                    element
+                    for element
+                    in list(permissions)
+                    if etree.QName(
+                        element
+                    ).localname == "license"
+                ]
+
+                if license_nodes:
+
+                    license_element = (
+                        license_nodes[0]
+                    )
+
+                    index = permissions.index(
+                        license_element
+                    )
+
+                    permissions.insert(
+                        index,
+                        holder,
+                    )
+
+                else:
+
+                    permissions.append(
+                        holder
+                    )
+
+                counters[
+                    "copyright_holder_updated"
+                ] += 1
+
+    # -------------------------------------------------------------
+    # 6B. Alinear copyright-statement con copyright-holder.
+    #
+    #     El statement debe mencionar a los mismos titulares
+    #     que copyright-holder para evitar conflicto semantico
+    #     en JATS4R.
+    # -------------------------------------------------------------
+
+    holder_nodes = root.xpath(
+        ".//*[local-name()='article-meta']"
+        "/*[local-name()='permissions']"
+        "/*[local-name()='copyright-holder']"
+    )
+
+    statement_nodes = root.xpath(
+        ".//*[local-name()='article-meta']"
+        "/*[local-name()='permissions']"
+        "/*[local-name()='copyright-statement']"
+    )
+
+    year_nodes = root.xpath(
+        ".//*[local-name()='article-meta']"
+        "/*[local-name()='permissions']"
+        "/*[local-name()='copyright-year']"
+    )
+
+    if holder_nodes and statement_nodes:
+
+        holder_value = " ".join(
+            "".join(
+                holder_nodes[0].itertext()
+            ).split()
+        )
+
+        year_value = ""
+
+        if year_nodes:
+            year_value = " ".join(
+                "".join(
+                    year_nodes[0].itertext()
+                ).split()
+            )
+
+        if holder_value:
+
+            if year_value:
+                new_statement = (
+                    f"Copyright: ? {year_value} "
+                    f"{holder_value}; "
+                    "licencia no exclusiva otorgada "
+                    "a la revista VinculaT?gica EFAN"
+                )
+            else:
+                new_statement = (
+                    f"Copyright: ? {holder_value}; "
+                    "licencia no exclusiva otorgada "
+                    "a la revista VinculaT?gica EFAN"
+                )
+
+            current_statement = " ".join(
+                "".join(
+                    statement_nodes[0].itertext()
+                ).split()
+            )
+
+            if current_statement != new_statement:
+
+                statement_nodes[0].text = (
+                    new_statement
+                )
+
+                counters[
+                    "copyright_statement_aligned"
+                ] += 1
+
+    # -------------------------------------------------------------
+    # 7. Eliminar URLs textuales editoriales.
+    #
+    # Se conservan:
+    # - DOI estructurado en article-id/pub-id.
+    # - DOCTYPE JATS.
+    # - namespaces XML/XLink/MathML.
+    #
+    # Se eliminan:
+    # - URL textual dentro de license-p.
+    # - URL DOI textual dentro de citation-text.
+    # -------------------------------------------------------------
+
+    editorial_text_urls_removed = 0
+
+    license_paragraphs = root.xpath(
+        ".//*[local-name()='license-p']"
+    )
+
+    for element in license_paragraphs:
+
+        value = "".join(
+            element.itertext()
+        ).strip()
+
+        if not value:
+            continue
+
+        original_value = value
+
+        markers = (
+            " Para ver una copia de esta licencia, visite ",
+            " Para consultar una copia de esta licencia, visite ",
+        )
+
+        for sentence_marker in markers:
+
+            marker_index = value.find(
+                sentence_marker
+            )
+
+            if marker_index >= 0:
+
+                suffix = value[
+                    marker_index
+                    + len(sentence_marker):
+                ].strip()
+
+                if suffix.lower().startswith(
+                    (
+                        "http://",
+                        "https://",
+                    )
+                ):
+                    value = value[
+                        :marker_index
+                    ].rstrip()
+
+                break
+
+        if (
+            value == original_value
+            and (
+                "http://" in value
+                or "https://" in value
+            )
+        ):
+
+            import re
+
+            value = re.sub(
+                r"https?://[^\s<]+",
+                "",
+                value,
+            )
+
+            value = " ".join(
+                value.split()
+            ).strip()
+
+        if value != original_value:
+
+            element.clear()
+            element.text = value
+
+            editorial_text_urls_removed += 1
+
+    citation_meta_values = root.xpath(
+        ".//*[local-name()='custom-meta']"
+        "[*[local-name()='meta-name'"
+        " and normalize-space(text())='citation-text']]"
+        "/*[local-name()='meta-value']"
+    )
+
+    for element in citation_meta_values:
+
+        value = "".join(
+            element.itertext()
+        ).strip()
+
+        if not value:
+            continue
+
+        original_value = value
+
+        import re
+
+        value = re.sub(
+            r"\s*https?://doi\.org/\S+\s*$",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        value = re.sub(
+            r"\s*https?://[^\s<]+\s*$",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        if value != original_value:
+
+            element.clear()
+            element.text = value
+
+            editorial_text_urls_removed += 1
+
+    counters[
+        "editorial_text_urls_removed"
+    ] = editorial_text_urls_removed
+
+    # -------------------------------------------------------------
+    # 7. Guardar preservando DOCTYPE.
+    # -------------------------------------------------------------
+
+    doctype = tree.docinfo.doctype
+
+    tree.write(
+        str(path),
+        encoding="UTF-8",
+        xml_declaration=True,
+        doctype=doctype or None,
+        pretty_print=False,
+    )
+
+    return counters
+
+
 def copy_conversion_files(
     service_result: OfficeConversionServiceResult,
     staging_directory: Path,
@@ -711,6 +1607,10 @@ def copy_conversion_files(
     rewrite_published_media_references(
         xml_target,
         media_source.name,
+    )
+
+    normalize_js4_published_xml(
+        xml_target,
     )
 
     rewrite_published_media_references(

@@ -240,7 +240,7 @@ def parse_affiliation(
     """
 
     number_match = re.match(
-        r"^\s*(\d+)\s+",
+        r"^\s*(\d+)\s*",
         text,
     )
 
@@ -254,7 +254,7 @@ def parse_affiliation(
     )
 
     institution = re.sub(
-        r"^\s*\d+\s+",
+        r"^\s*\d+\s*",
         "",
         text,
         count=1,

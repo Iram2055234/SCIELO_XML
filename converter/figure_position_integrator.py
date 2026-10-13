@@ -448,6 +448,47 @@ def remove_source_caption_paragraph(
     return True
 
 
+
+def safe_figure_reference_element(
+    reference_element: etree._Element,
+) -> etree._Element:
+    """
+    Evita insertar <fig> dentro de estructuras JATS que
+    no lo permiten, particularmente <list-item>.
+
+    Si el elemento de referencia vive dentro de un
+    <list-item>, asciende hasta el <list> contenedor.
+    En caso contrario, conserva el elemento original.
+    """
+
+    current = reference_element
+
+    list_ancestor = None
+
+    while current is not None:
+
+        tag = current.tag
+
+        if isinstance(
+            tag,
+            str,
+        ):
+            local_name = etree.QName(
+                current
+            ).localname
+
+            if local_name == "list":
+                list_ancestor = current
+                break
+
+        current = current.getparent()
+
+    if list_ancestor is not None:
+        return list_ancestor
+
+    return reference_element
+
+
 def move_figures_to_original_positions(
     xml_path: str | Path,
     docx_path: str | Path,
@@ -537,8 +578,14 @@ def move_figures_to_original_positions(
 
         if anchor is not None:
 
+            safe_anchor = (
+                safe_figure_reference_element(
+                    anchor
+                )
+            )
+
             insert_after_element(
-                reference_element=anchor,
+                reference_element=safe_anchor,
                 new_element=figure,
             )
 
@@ -563,9 +610,15 @@ def move_figures_to_original_positions(
 
             if caption_paragraph is not None:
 
+                safe_caption_reference = (
+                    safe_figure_reference_element(
+                        caption_paragraph
+                    )
+                )
+
                 insert_before_element(
                     reference_element=(
-                        caption_paragraph
+                        safe_caption_reference
                     ),
                     new_element=figure,
                 )
@@ -596,9 +649,15 @@ def move_figures_to_original_positions(
 
             if next_paragraph is not None:
 
+                safe_next_reference = (
+                    safe_figure_reference_element(
+                        next_paragraph
+                    )
+                )
+
                 insert_before_element(
                     reference_element=(
-                        next_paragraph
+                        safe_next_reference
                     ),
                     new_element=figure,
                 )

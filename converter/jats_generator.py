@@ -1863,15 +1863,32 @@ def detect_reference_publication_type(
     ):
         return "book"
 
+    web_date_signature = bool(
+        re.search(
+            r"\((?:"
+            r"s\.\s*f\.(?:-[a-z])?"
+            r"|(?:18|19|20)\d{2}\s*,[^)]*"
+            r"|\d{1,2}\s+de\s+"
+            r"[A-Za-z??????????????]+\s+de\s+"
+            r"(?:18|19|20)\d{2}"
+            r")\)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
     if (
         has_url
         and not has_doi
-        and re.search(
-            r"\b(?:"
-            r"recuperado|retrieved|"
-            r"sitio web|website|blog"
-            r")\b",
-            lower,
+        and (
+            web_date_signature
+            or re.search(
+                r"\b(?:"
+                r"recuperado|retrieved|"
+                r"sitio web|website|blog"
+                r")\b",
+                lower,
+            )
         )
     ):
         return "webpage"
@@ -1884,20 +1901,34 @@ def detect_reference_publication_type(
 def split_apa_reference(
     raw_text: str,
 ) -> dict[str, str]:
-    """Separa autores, año, título y resto según patrón APA."""
+    """
+    Separa autores, fecha/a?o, t?tulo y resto seg?n patrones
+    APA habituales, incluyendo fechas completas y s. f.
+    """
 
     text = normalize_reference_text(
         raw_text
     )
 
-    year_match = re.search(
-        r"\(((?:18|19|20)\d{2})"
-        r"[a-z]?\)",
+    date_match = re.search(
+        r"\("
+        r"(?:"
+        r"(?:18|19|20)\d{2}"
+        r"(?:[a-z])?"
+        r"(?:\s*,\s*[^)]*)?"
+        r"|"
+        r"\d{1,2}\s+de\s+"
+        r"[A-Za-z??????????????]+\s+de\s+"
+        r"(?:18|19|20)\d{2}"
+        r"|"
+        r"s\.\s*f\.(?:-[a-z])?"
+        r")"
+        r"\)",
         text,
         flags=re.IGNORECASE,
     )
 
-    if year_match is None:
+    if date_match is None:
         return {
             "authors": "",
             "year": (
@@ -1909,16 +1940,31 @@ def split_apa_reference(
             "tail": "",
         }
 
-    # No quitar el punto final porque puede ser
-    # la inicial del último autor APA.
+    # El bloque situado antes de la fecha APA corresponde
+    # al autor o entidad responsable.
     authors = text[
-        : year_match.start()
+        : date_match.start()
     ].strip()
 
-    year = year_match.group(1)
+    # Conservamos las iniciales de autores personales, pero
+    # retiramos espacios sobrantes.
+    authors = authors.strip()
+
+    date_text = date_match.group(0)
+
+    year_match = re.search(
+        r"(?:18|19|20)\d{2}",
+        date_text,
+    )
+
+    year = (
+        year_match.group(0)
+        if year_match is not None
+        else ""
+    )
 
     remainder = text[
-        year_match.end() :
+        date_match.end() :
     ].strip()
 
     remainder = re.sub(
@@ -1930,10 +1976,55 @@ def split_apa_reference(
     title = remainder
     tail = ""
 
-    split_match = re.search(
+    split_match = None
+
+    protected_abbreviations = {
+        "dr",
+        "dra",
+        "sr",
+        "sra",
+        "mtro",
+        "mtra",
+        "ing",
+        "lic",
+        "prof",
+        "profa",
+    }
+
+    for candidate in re.finditer(
         r"\.\s+(?=\S)",
         remainder,
-    )
+    ):
+
+        before = remainder[
+            : candidate.start()
+        ].rstrip()
+
+        token_match = re.search(
+            r"([A-Za-z??????????????]+)$",
+            before,
+        )
+
+        token = (
+            token_match.group(1)
+            if token_match is not None
+            else ""
+        )
+
+        if (
+            token.casefold()
+            in protected_abbreviations
+        ):
+            continue
+
+        if (
+            len(token) == 1
+            and token.isalpha()
+        ):
+            continue
+
+        split_match = candidate
+        break
 
     if split_match is not None:
 
@@ -2169,6 +2260,21 @@ def add_page_locator(
             element_citation,
             "lpage",
             pages_match.group(2),
+        )
+
+        return
+
+    compact_elocation_match = re.fullmatch(
+        r"[eE]\d{3,}",
+        value,
+    )
+
+    if compact_elocation_match is not None:
+
+        add_text_element(
+            element_citation,
+            "elocation-id",
+            value,
         )
 
         return
